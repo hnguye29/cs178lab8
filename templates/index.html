@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <header>
+    <title>Kmeans</title>
+    <link rel="stylesheet" type="text/css" href="static/style.css" />
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+  </header>
+  <body>
+    <div id="control">
+      <div>
+        <span>dataset</span>
+        <select id="dataset" onchange="">
+          {% for dataset in datasets %}
+          <option>{{dataset}}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <span>n_clusters</span>
+        <input type="number" id="n_clusters" value="2" min="2" max="5" onchange="" />
+      </div>
+      <div>
+        <span id="step-label">step:</span>
+        <span id="step">0</span>
+      </div>
+      <div>
+        <button id="back" onclick="">⏪</button>
+        <button id="run" onclick="">run</button>
+        <button id="forward" onclick="">⏩</button>
+        <button id="reset" onclick="">reset</button>
+      </div>
+    </div>
+    <div><svg id="scatterplot"></svg></div>
+    <script src="static/index.js"></script>
+  </body>
+</html>
