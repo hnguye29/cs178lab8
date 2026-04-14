@@ -106,7 +106,7 @@ def generate_dataset(name, n_points=200, seed=42):
 
         points = np.vstack((top, bottom))
         noise = rng.normal(0, 0.08, points.shape)
-        return 3 * (points + noise)
+        return (points + noise)
 
     raise ValueError(f"Unknown dataset: {name}")
 
@@ -206,6 +206,32 @@ def init_kmeans():
     STATE = make_state(dataset, n_clusters, centroids)
     return to_snapshot(STATE)
 
+@app.route("/api/update_centroids", methods=["POST"])
+def update_centroids():
+    global STATE
+
+    if STATE is None:
+        return {"error": "Initialize first."}, 400
+
+    request_data = request.get_json()
+    centroids = np.array(request_data["centroids"], dtype=float)
+
+    if len(centroids) != STATE["n_clusters"]:
+        return {"error": "Centroid count does not match n_clusters."}, 400
+
+    STATE["centroids"] = centroids
+    STATE["labels"] = assign_labels(STATE["points"], STATE["centroids"])
+    STATE["converged"] = False
+
+    # overwrite current snapshot (no new step)
+    STATE["history"][-1] = {
+        "centroids": STATE["centroids"].copy(),
+        "labels": STATE["labels"].copy(),
+        "step": STATE["step"],
+        "converged": STATE["converged"]
+    }
+
+    return to_snapshot(STATE)
 
 @app.route("/api/step", methods=["POST"])
 def step_kmeans():

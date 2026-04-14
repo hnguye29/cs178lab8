@@ -1,6 +1,6 @@
-let width = 460;
-let height = 460;
-let margin = 35;
+let width = 520;
+let height = 520;
+let margin = 45;
 
 let svg = d3
   .select("svg#scatterplot")
@@ -28,6 +28,7 @@ let currentState = {
   n_clusters: +clusterInput.property("value"),
   points: [],
   centroids: [],
+  labels: [],
   step: 0,
   converged: false,
 };
@@ -51,97 +52,59 @@ const colors = [
 bindControls();
 initializePage();
 
-function initializePage() {
-  load_and_plot(`${currentState.dataset}.csv`);
+async function initializePage() {
+  await initializeFromBackend();
 }
 
-function load_and_plot(filename) {
-  d3.csv(`static/datasets/${filename}`, d3.autoType).then((data) => {
-    currentState.points = data.map((d) => ({
-      x: d.x,
-      y: d.y,
-      label: null,
-    }));
-
-    currentState.step = 0;
-    currentState.converged = false;
-    stepText.text(currentState.step);
-
-    initializeRandomCentroids();
-    assignLabelsFromCurrentCentroids();
-    updateScales();
-    renderAll();
+async function initializeFromBackend() {
+  let response = await post("/api/init", {
+    dataset: currentState.dataset,
+    n_clusters: currentState.n_clusters,
+    centroids: null,
   });
-}
 
-function initializeRandomCentroids() {
-  let shuffled = d3.shuffle([...currentState.points]);
-  currentState.centroids = shuffled
-    .slice(0, currentState.n_clusters)
-    .map((d) => ({ x: d.x, y: d.y }));
-}
-
-function assignLabelsFromCurrentCentroids() {
-  currentState.points.forEach((p) => {
-    let bestLabel = 0;
-    let bestDist = Infinity;
-
-    currentState.centroids.forEach((c, i) => {
-      let dx = p.x - c.x;
-      let dy = p.y - c.y;
-      let dist = dx * dx + dy * dy;
-
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestLabel = i;
-      }
-    });
-
-    p.label = bestLabel;
-  });
+  applyServerState(response);
+  renderAll();
 }
 
 function bindControls() {
-  datasetSelect.on("change", function () {
+  datasetSelect.on("change", async function () {
     currentState.dataset = this.value;
-    load_and_plot(`${currentState.dataset}.csv`);
+    await initializeFromBackend();
   });
 
-  clusterInput.on("change", function () {
+  clusterInput.on("change", async function () {
     let value = +this.value;
-    value = Math.max(2, Math.min(5, value));
+    value = Math.max(2, value);
     this.value = value;
 
     currentState.n_clusters = value;
-    load_and_plot(`${currentState.dataset}.csv`);
+    await initializeFromBackend();
   });
 
-  resetButton.on("click", function () {
-    load_and_plot(`${currentState.dataset}.csv`);
+  resetButton.on("click", async function () {
+    let response = await post("/api/reset", {});
+    applyServerState(response);
+    renderAll();
   });
 
   forwardButton.on("click", async function () {
     syncCentroidsFromInputs();
 
-    let response = await post("/step_forward", {
-      dataset: currentState.dataset,
-      n_clusters: currentState.n_clusters,
-      points: currentState.points,
+    // send updated centroids to backend without reinitializing
+    let response = await post("/api/update_centroids", {
       centroids: currentState.centroids,
-      step: currentState.step,
     });
 
+    applyServerState(response);
+
+    response = await post("/api/step", {});
     applyServerState(response);
     renderAll();
   });
 
   backButton.on("click", async function () {
-    let response = await post("/step_back", {
-      dataset: currentState.dataset,
-      n_clusters: currentState.n_clusters,
-      step: currentState.step,
-    });
-
+    let response = await post("/api/back", {});
     applyServerState(response);
     renderAll();
   });
@@ -149,24 +112,33 @@ function bindControls() {
   runButton.on("click", async function () {
     syncCentroidsFromInputs();
 
-    let response = await post("/run", {
-      dataset: currentState.dataset,
-      n_clusters: currentState.n_clusters,
-      points: currentState.points,
+    let response = await post("/api/update_centroids", {
       centroids: currentState.centroids,
-      step: currentState.step,
     });
 
+    applyServerState(response);
+
+    response = await post("/api/run", {});
     applyServerState(response);
     renderAll();
   });
 }
 
 function applyServerState(serverData) {
-  currentState.points = serverData.points || currentState.points;
+  currentState.dataset = serverData.dataset ?? currentState.dataset;
+  currentState.n_clusters = serverData.n_clusters ?? currentState.n_clusters;
   currentState.centroids = serverData.centroids || currentState.centroids;
+  currentState.labels = serverData.labels || [];
   currentState.step = serverData.step ?? currentState.step;
-  currentState.converged = serverData.converged ?? false;
+  currentState.converged = serverData.converged ?? currentState.converged;
+
+  let rawPoints = serverData.points || [];
+
+  currentState.points = rawPoints.map((p, i) => ({
+    x: p[0],
+    y: p[1],
+    label: currentState.labels[i],
+  }));
 
   stepText.text(currentState.step);
   updateScales();
@@ -178,7 +150,7 @@ function syncCentroidsFromInputs() {
   for (let i = 0; i < currentState.n_clusters; i++) {
     let x = +d3.select(`#centroid-x-${i}`).property("value");
     let y = +d3.select(`#centroid-y-${i}`).property("value");
-    updated.push({ x: x, y: y });
+    updated.push([x, y]);
   }
 
   currentState.centroids = updated;
@@ -187,11 +159,11 @@ function syncCentroidsFromInputs() {
 function updateScales() {
   let allX = [
     ...currentState.points.map((d) => d.x),
-    ...currentState.centroids.map((d) => d.x),
+    ...currentState.centroids.map((d) => d[0]),
   ];
   let allY = [
     ...currentState.points.map((d) => d.y),
-    ...currentState.centroids.map((d) => d.y),
+    ...currentState.centroids.map((d) => d[1]),
   ];
 
   if (allX.length === 0 || allY.length === 0) return;
@@ -259,7 +231,7 @@ function renderCentroidInputs() {
       .attr("type", "number")
       .attr("step", "0.01")
       .attr("id", `centroid-x-${i}`)
-      .attr("value", roundTo(d.x, 2))
+      .attr("value", roundTo(d[0], 2))
       .style("width", "90px");
 
     row.append("span").text("y:");
@@ -269,16 +241,55 @@ function renderCentroidInputs() {
       .attr("type", "number")
       .attr("step", "0.01")
       .attr("id", `centroid-y-${i}`)
-      .attr("value", roundTo(d.y, 2))
+      .attr("value", roundTo(d[1], 2))
       .style("width", "90px");
   });
 }
 
 function drawScatterplot() {
   svg.selectAll("*").remove();
+
+  svg
+    .append("rect")
+    .attr("x", margin)
+    .attr("y", margin)
+    .attr("width", width - 2 * margin)
+    .attr("height", height - 2 * margin)
+    .attr("fill", "#dcdcdc");
+
+  drawGrid();
   drawAxes();
   drawPoints();
   drawCentroids();
+}
+
+function drawGrid() {
+  let xTicks = xScale.ticks(6);
+  let yTicks = yScale.ticks(6);
+
+  svg
+    .append("g")
+    .selectAll("line.vertical-grid")
+    .data(xTicks)
+    .join("line")
+    .attr("x1", (d) => xScale(d))
+    .attr("x2", (d) => xScale(d))
+    .attr("y1", margin)
+    .attr("y2", height - margin)
+    .attr("stroke", "#efefef")
+    .attr("stroke-width", 1);
+
+  svg
+    .append("g")
+    .selectAll("line.horizontal-grid")
+    .data(yTicks)
+    .join("line")
+    .attr("x1", margin)
+    .attr("x2", width - margin)
+    .attr("y1", (d) => yScale(d))
+    .attr("y2", (d) => yScale(d))
+    .attr("stroke", "#efefef")
+    .attr("stroke-width", 1);
 }
 
 function drawAxes() {
@@ -289,15 +300,19 @@ function drawAxes() {
     .append("g")
     .attr("transform", `translate(0, ${height - margin})`)
     .call(xAxis)
-    .call((g) => g.selectAll("path, line").attr("stroke", "#b8b8b8"))
-    .call((g) => g.selectAll("text").attr("fill", "#4d4d4d").style("font-size", "11px"));
+    .call((g) => g.selectAll("path, line").attr("stroke", "#a9a9a9"))
+    .call((g) =>
+      g.selectAll("text").attr("fill", "#4d4d4d").style("font-size", "11px")
+    );
 
   svg
     .append("g")
     .attr("transform", `translate(${margin}, 0)`)
     .call(yAxis)
-    .call((g) => g.selectAll("path, line").attr("stroke", "#b8b8b8"))
-    .call((g) => g.selectAll("text").attr("fill", "#4d4d4d").style("font-size", "11px"));
+    .call((g) => g.selectAll("path, line").attr("stroke", "#a9a9a9"))
+    .call((g) =>
+      g.selectAll("text").attr("fill", "#4d4d4d").style("font-size", "11px")
+    );
 }
 
 function drawPoints() {
@@ -306,7 +321,7 @@ function drawPoints() {
     .selectAll("circle")
     .data(currentState.points)
     .join("circle")
-    .attr("r", 4.5)
+    .attr("r", 5.5)
     .attr("cx", (d) => xScale(d.x))
     .attr("cy", (d) => yScale(d.y))
     .attr("fill", (d) => {
@@ -314,22 +329,21 @@ function drawPoints() {
       return colors[d.label % colors.length];
     })
     .attr("stroke", "white")
-    .attr("stroke-width", 0.5)
+    .attr("stroke-width", 0.8)
     .attr("opacity", 0.9);
 }
 
 function drawCentroids() {
   svg
     .append("g")
-    .selectAll("path.centroid")
+    .selectAll("circle.centroid")
     .data(currentState.centroids)
-    .join("path")
+    .join("circle")
     .attr("class", "centroid")
-    .attr("transform", (d) => `translate(${xScale(d.x)}, ${yScale(d.y)})`)
-    .attr("d", d3.symbol().type(d3.symbolDiamond).size(90))
+    .attr("cx", (d) => xScale(d[0]))
+    .attr("cy", (d) => yScale(d[1]))
+    .attr("r", 12)
     .attr("fill", (d, i) => colors[i % colors.length])
-    .attr("stroke", "#222")
-    .attr("stroke-width", 1.5);
 }
 
 async function post(url = "", data = {}) {
